@@ -31,11 +31,7 @@ export async function middleware(request: NextRequest) {
     if (!process.env.PROXY_URL) {
         return;
     }
-
-    if (!process.env.SF_ACCESS_KEY && process.env.NODE_ENV === 'production') {
-        throw 'No access key found';
-    }
-
+    
     //handle known service paths
     const paths = [
         '/Sitefinity/Services',
