@@ -2,24 +2,9 @@ import { NextResponse } from 'next/server';
 import { NextRequest } from 'next/server';
 import { RootUrlService } from '@progress/sitefinity-nextjs-sdk/rest-sdk';
 
+export const templateRegex = /\/sf\/system\/(?<type>.*?)\/Default\.GetPageTemplates\(selectedPages=(?<selectedPages>.*?)\)/;
+
 export async function middleware(request: NextRequest) {
-    // handle available templates api call
-    const regex = /\/sf\/system\/(?<type>.*?)\/Default\.GetPageTemplates\(selectedPages=(?<selectedPages>.*?)\)/;
-    const match = request.nextUrl.pathname.match(regex);
-    if (match && match.groups) {
-        const type = match.groups['type'];
-        const selectedPages = match.groups['selectedPages'];
-
-        if (type && selectedPages) {
-            let newUrl = new URL(`/api/template-interceptor/${type}?selectedPages=${selectedPages}`, request.url);
-            return NextResponse.rewrite(newUrl);
-        }
-    }
-
-    // handle form render
-    if (/\/sitefinity\/forms/i.test(request.nextUrl.pathname) && request.nextUrl.search.indexOf('render=true') !== -1) {
-        return NextResponse.next();
-    }
 
     // handle known paths
     if (request.nextUrl.pathname.startsWith('/assets') ||
@@ -28,12 +13,24 @@ export async function middleware(request: NextRequest) {
         return NextResponse.next();
     }
 
-    if (!process.env.PROXY_URL) {
-        return;
+    // handle available templates api call
+    const match = request.nextUrl.pathname.match(templateRegex);
+    if (match && match.groups) {
+        const type = match.groups['type'];
+        const selectedPages = match.groups['selectedPages'];
+
+        if (type && selectedPages) {
+            let newUrl = new URL(`/api/template-interceptor/${type}`, request.url);
+            return NextResponse.rewrite(newUrl);
+        }
     }
-    
-    //handle known service paths
-    const paths = [
+
+    // user defined paths that can be additionally proxied
+    // can be used for legacy MVC/WebForms pages or paths that are entirely custom
+    const whitelistedPaths: string[] = [];
+
+    //handle known CMS paths
+    const cmsPaths = [
         '/Sitefinity/Services',
         '/Sitefinity/adminapp',
         '/adminapp',
@@ -49,12 +46,14 @@ export async function middleware(request: NextRequest) {
         '/documents',
         '/videos',
         '/forms/submit',
-        '/ExtRes'
+        '/ExtRes',
+        '/appstatus'
     ];
 
     if (request.nextUrl.pathname.indexOf('.axd') !== -1 ||
-        paths.some(path => request.nextUrl.pathname.toUpperCase().startsWith(path.toUpperCase())) ||
-        /\/sitefinity(?!\/template)/i.test(request.nextUrl.pathname) ||
+        whitelistedPaths.some(path => request.nextUrl.pathname.toUpperCase().startsWith(path.toUpperCase())) ||
+        cmsPaths.some(path => request.nextUrl.pathname.toUpperCase().startsWith(path.toUpperCase())) ||
+        /\/sitefinity(?!\/(template|forms))/i.test(request.nextUrl.pathname) ||
         /Action\/(Edit|Preview)/i.test(request.nextUrl.pathname)
         ) {
 
@@ -83,21 +82,7 @@ export async function middleware(request: NextRequest) {
         });
     }
 
-    // proxy everything else and if returns X-SFRENDERER-PROXY, handle it, otherwise - it's a valid response
-    const {url, headers} = generateProxyRequest(request);
-    return fetch(url, {headers}).then(x => {
-        if (x.headers.has('X-SFRENDERER-PROXY')) {
-            return NextResponse.next();
-        } else {
-            if (x.status === 404) {
-                // handles 404 pages in the Next.js app
-                // if you want to handle them with Sitefinity, remove this part
-                return NextResponse.next({status: 404});
-            }
-
-            return x;
-        }
-    });
+    return NextResponse.next();
 }
 
 function generateProxyRequest(request: NextRequest) {
@@ -107,7 +92,7 @@ function generateProxyRequest(request: NextRequest) {
         headers.set('X-SF-WEBSERVICEPATH', RootUrlService.getWebServicePath());
     }
 
-    let resolvedHost =  process.env.PROXY_ORIGINAL_HOST || request.nextUrl.host;
+    let resolvedHost =  request.nextUrl.host;
     if (!resolvedHost) {
         if (process.env.PORT) {
             resolvedHost = `localhost:${process.env.PORT}`;
@@ -124,7 +109,7 @@ function generateProxyRequest(request: NextRequest) {
         headers.set('X-ORIGINAL-HOST', resolvedHost);
     }
 
-    const proxyURL = new URL(process.env.PROXY_URL!);
+    const proxyURL = new URL(process.env.SF_CMS_URL!);
     let url = new URL(request.url);
     headers.set('HOST', proxyURL.hostname);
 
